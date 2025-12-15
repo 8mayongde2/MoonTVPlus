@@ -18,11 +18,7 @@ import {
   subscribeToDataUpdates,
 } from '@/lib/db.client';
 import { getDoubanCategories } from '@/lib/douban.client';
-import {
-  getTMDBUpcomingContent,
-  getTMDBImageUrl,
-  TMDBItem,
-} from '@/lib/tmdb.client';
+import { getTMDBImageUrl, TMDBItem } from '@/lib/tmdb.client';
 import { DoubanItem } from '@/lib/types';
 
 import CapsuleSwitch from '@/components/CapsuleSwitch';
@@ -42,7 +38,7 @@ function HomeClient() {
     BangumiCalendarData[]
   >([]);
   const [loading, setLoading] = useState(true);
-  const { announcement, tmdbApiKey } = useSite();
+  const { announcement } = useSite();
 
   const [showAnnouncement, setShowAnnouncement] = useState(false);
 
@@ -106,18 +102,23 @@ function HomeClient() {
 
         setBangumiCalendarData(bangumiCalendarData);
 
-        // 如果配置了 TMDB API Key，则获取即将上映/播出内容
-        if (tmdbApiKey) {
-          const tmdbData = await getTMDBUpcomingContent(tmdbApiKey);
-          if (tmdbData.code === 200) {
-            // 按上映/播出日期升序排序（最近的排在前面）
-            const sortedContent = [...tmdbData.list].sort((a, b) => {
-              const dateA = new Date(a.release_date || '9999-12-31').getTime();
-              const dateB = new Date(b.release_date || '9999-12-31').getTime();
-              return dateA - dateB;
-            });
-            setUpcomingContent(sortedContent);
+        // 获取即将上映/播出内容（使用后端API缓存）
+        try {
+          const response = await fetch('/api/tmdb/upcoming');
+          if (response.ok) {
+            const result = await response.json();
+            if (result.code === 200 && result.data) {
+              // 按上映/播出日期升序排序（最近的排在前面）
+              const sortedContent = [...result.data].sort((a, b) => {
+                const dateA = new Date(a.release_date || '9999-12-31').getTime();
+                const dateB = new Date(b.release_date || '9999-12-31').getTime();
+                return dateA - dateB;
+              });
+              setUpcomingContent(sortedContent);
+            }
           }
+        } catch (error) {
+          console.error('获取TMDB即将上映数据失败:', error);
         }
       } catch (error) {
         console.error('获取推荐数据失败:', error);
@@ -127,7 +128,7 @@ function HomeClient() {
     };
 
     fetchRecommendData();
-  }, [tmdbApiKey]);
+  }, []);
 
   // 处理收藏数据更新的函数
   const updateFavoriteItems = useCallback(
@@ -469,7 +470,7 @@ function HomeClient() {
               </section>
 
               {/* 即将上映/播出 (TMDB) */}
-              {tmdbApiKey && upcomingContent.length > 0 && (
+              {upcomingContent.length > 0 && (
                 <section className='mb-8'>
                   <div className='mb-4 flex items-center justify-between'>
                     <h2 className='text-xl font-bold text-gray-800 dark:text-gray-200'>
