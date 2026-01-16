@@ -11,6 +11,44 @@ export interface ChangelogEntry {
 
 export const changelog: ChangelogEntry[] = [
 	{
+    version: '207.0.0',
+    date: '2026-01-13',
+	added: [
+		"私人影库增加小雅支持",
+		"测速增加码率测算",
+		"私人影库增加求片功能",
+		"搜索增加简繁转换器",
+		"openlist多目录扫描支持"
+    ],
+    changed: [
+		"视频源保留关键字增加xiaoya，emby",
+		"年代筛选的年代改为动态生成",
+		"openlist支持视频预览方式播放"
+    ],
+    fixed: [
+		"修复upstash方式数据导入报错",
+		"修复新加载弹幕不显示弹幕数量",
+		"修复生产环境emby分类返回空数组"
+	]
+	},
+	{
+    version: '206.3.0',
+    date: '2026-01-10',
+	added: [
+		"emby支持配置多源",
+		"emby支持配置高级参数（转码mp4，代理等）",
+		"新增自定义ai问片默认消息"
+    ],
+    changed: [
+		"优化搜索逻辑和聚合逻辑",
+		"加载缓存弹幕时显示元信息",
+		"服务器代理豆瓣图片反防盗链增强"
+    ],
+    fixed: [
+		"修复emby分类切换时加载旧数据"
+	]
+	},
+	{
     version: '206.2.1',
     date: '2026-01-08',
 	added: [
