@@ -13,6 +13,7 @@ import {
 } from '@/lib/db.client';
 import AddToPlaylistModal from '@/components/AddToPlaylistModal';
 import Toast, { ToastProps } from '@/components/Toast';
+import LyricsPiPWindow from '@/components/LyricsPiPWindow';
 
 interface Song {
   id: string;
@@ -53,6 +54,16 @@ interface DbRecord {
   artist: string;
   album?: string;
   pic?: string;
+}
+
+// 扩展 Window 接口以支持 Document PiP API
+declare global {
+  interface Window {
+    documentPictureInPicture?: {
+      requestWindow: (options: { width: number; height: number }) => Promise<Window>;
+      window: Window | null;
+    };
+  }
 }
 
 export default function MusicPage() {
@@ -111,6 +122,11 @@ export default function MusicPage() {
     onConfirm: () => {},
     onCancel: () => {},
   });
+
+  // PiP 相关状态
+  const [showPiPLyrics, setShowPiPLyrics] = useState(false);
+  const [pipOpacity, setPipOpacity] = useState(0.9);
+  const [pipMinimized, setPipMinimized] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const lyricsContainerRef = useRef<HTMLDivElement>(null);
@@ -291,6 +307,36 @@ export default function MusicPage() {
     };
 
     initializePlayState();
+  }, []);
+
+  // 恢复 PiP 偏好设置
+  useEffect(() => {
+    const savedOpacity = localStorage.getItem('lyricsPiPOpacity');
+    const savedMinimized = localStorage.getItem('lyricsPiPMinimized');
+    if (savedOpacity) setPipOpacity(parseFloat(savedOpacity));
+    if (savedMinimized) setPipMinimized(savedMinimized === 'true');
+  }, []);
+
+  // 监听来自 PiP 窗口的消息
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      switch (event.data.type) {
+        case 'PIP_OPACITY_CHANGE':
+          setPipOpacity(event.data.opacity);
+          localStorage.setItem('lyricsPiPOpacity', event.data.opacity.toString());
+          break;
+        case 'PIP_MINIMIZED_CHANGE':
+          setPipMinimized(event.data.minimized);
+          localStorage.setItem('lyricsPiPMinimized', event.data.minimized.toString());
+          break;
+        case 'PIP_CLOSE':
+          setShowPiPLyrics(false);
+          break;
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
   }, []);
 
   // 监听播放状态变化，自动保存
@@ -1098,6 +1144,29 @@ export default function MusicPage() {
     }
   };
 
+  // PiP 窗口管理
+  const togglePiPLyrics = () => {
+    if (!('documentPictureInPicture' in window)) {
+      setToast({
+        message: '您的浏览器不支持画中画功能，请使用 Chrome 116+ 版本',
+        type: 'error',
+      });
+      // 降级方案：打开全屏歌词
+      setShowLyrics(true);
+      return;
+    }
+
+    if (!currentSong) {
+      setToast({
+        message: '请先播放歌曲',
+        type: 'info',
+      });
+      return;
+    }
+
+    setShowPiPLyrics(!showPiPLyrics);
+  };
+
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   const getQualityLabel = () => {
@@ -1861,6 +1930,24 @@ export default function MusicPage() {
                     </div>
                   </div>
                 </div>
+                {/* PiP 歌词按钮 */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    togglePiPLyrics();
+                  }}
+                  className={`transition-colors ${
+                    showPiPLyrics
+                      ? 'text-green-500 hover:text-green-400'
+                      : 'text-zinc-500 hover:text-white'
+                  }`}
+                  title={showPiPLyrics ? '关闭画中画歌词' : '画中画歌词'}
+                  disabled={!currentSong}
+                >
+                  <svg className="w-4 h-4 md:w-5 md:h-5" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M19 7h-8v6h8V7zm2-4H3c-1.1 0-2 .9-2 2v14c0 1.1.9 1.98 2 1.98h18c1.1 0 2-.88 2-1.98V5c0-1.1-.9-2-2-2zm0 16.01H3V4.98h18v14.03z"/>
+                  </svg>
+                </button>
                 {/* 添加到歌单按钮 */}
                 <button
                   onClick={(e) => {
@@ -2280,6 +2367,28 @@ export default function MusicPage() {
           </div>,
           document.body
         )}
+
+      {/* PiP Lyrics Window */}
+      {showPiPLyrics && (
+        <LyricsPiPWindow
+          currentSong={currentSong}
+          lyrics={lyrics}
+          currentLyricIndex={currentLyricIndex}
+          isPlaying={isPlaying}
+          currentTime={currentTime}
+          opacity={pipOpacity}
+          minimized={pipMinimized}
+          onOpacityChange={(opacity) => {
+            setPipOpacity(opacity);
+            localStorage.setItem('lyricsPiPOpacity', opacity.toString());
+          }}
+          onMinimizedChange={(minimized) => {
+            setPipMinimized(minimized);
+            localStorage.setItem('lyricsPiPMinimized', minimized.toString());
+          }}
+          onClose={() => setShowPiPLyrics(false)}
+        />
+      )}
       </>
     </div>
   );
