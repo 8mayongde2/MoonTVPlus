@@ -108,7 +108,14 @@ function normalizeUrl(base: string, href?: string): string {
   const trimmed = href.trim();
   if (!trimmed) return base;
   if (/^javascript:/i.test(trimmed)) return '';
-  return new URL(trimmed, base).toString();
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  try {
+    return new URL(trimmed, base).toString();
+  } catch {
+    // 部分 Legado 源会把 bookSourceUrl 当作名称，真实服务端地址放在变量里。
+    // 无法解析相对地址时保留原值，让上层给出更准确的“非 HTTP URL”错误，而不是直接 Invalid URL。
+    return trimmed;
+  }
 }
 
 function encodeRuleParam(value: string) {
@@ -171,13 +178,51 @@ function renderTemplateExpressions(raw: string, keyword = '', page = 1) {
   });
 }
 
-function runJsSnippet(code: string, context: Record<string, any>, timeout = 1000): string {
+
+function unwrapJsRule(code: string) {
+  const raw = String(code || '').trim();
+  const block = raw.match(/^<js>([\s\S]*?)<\/js>$/i);
+  if (block) return block[1].trim();
+  return raw.replace(/^@js:/, '').trim();
+}
+
+function parseArguments(value?: string) {
+  const out: Record<string, string> = {};
+  String(value || '').split(/[&;\n]+/).forEach((part) => {
+    const idx = part.indexOf('=');
+    if (idx <= 0) return;
+    const key = part.slice(0, idx).trim();
+    const val = part.slice(idx + 1).trim();
+    try { out[key] = decodeURIComponent(val); } catch { out[key] = val; }
+  });
+  return out;
+}
+
+function makeSourceRuntime(source: any, baseUrl?: string) {
+  const raw = source || {};
+  const variable = raw.variable || raw.loginUrl || raw.bookSourceUrl || baseUrl || '';
+  return {
+    ...raw,
+    getVariable: () => variable,
+    getLoginInfoMap: () => ({}),
+    getKey: () => raw.key || raw.bookSourceUrl || baseUrl || '',
+  };
+}
+
+function runJsSnippetRaw(code: string, context: Record<string, any>, timeout = 1000): any {
+  const sourceRuntime = makeSourceRuntime(context.source, context.baseUrl);
   const java = {
     base64Encode: (value: unknown) => Buffer.from(String(value ?? ''), 'utf8').toString('base64'),
     base64Decode: (value: unknown) => Buffer.from(String(value ?? ''), 'base64').toString('utf8'),
     md5Encode: (value: unknown) => crypto.createHash('md5').update(String(value ?? '')).digest('hex'),
     strToBytes: (value: unknown) => Buffer.from(String(value ?? ''), 'utf8'),
     base64DecodeToByteArray: (value: unknown) => Buffer.from(String(value ?? ''), 'base64'),
+    hexDecodeToString: (value: unknown) => Buffer.from(String(value ?? ''), 'hex').toString('utf8'),
+    ajax: () => '',
+    getWebViewUA: () => 'Mozilla/5.0 (Linux; Android 10) Mobile Safari/537.36',
+    deviceID: () => '',
+    androidId: () => '',
+    longToast: () => undefined,
     encodeURI: (value: unknown) => encodeURIComponent(String(value ?? '')),
     encodeURIComponent: (value: unknown) => encodeURIComponent(String(value ?? '')),
     put: (key: string, value: any) => { variableStore.set(key, value); return value; },
@@ -186,11 +231,14 @@ function runJsSnippet(code: string, context: Record<string, any>, timeout = 1000
     htmlFormat: (value: unknown) => he.decode(String(value ?? '')).replace(/<br\s*\/?/gi, '\n').replace(/<[^>]+>/g, ''),
   };
   const cookie = {
+    getCookie: () => '',
     removeCookie: () => undefined,
     mapToCookie: (input: any) => typeof input === 'string' ? input : Array.isArray(input) ? input.join('; ') : '',
   };
   const sandbox: Record<string, any> = {
     ...context,
+    source: sourceRuntime,
+    book: context.book || {},
     java,
     cookie,
     Buffer,
@@ -203,24 +251,39 @@ function runJsSnippet(code: string, context: Record<string, any>, timeout = 1000
     encodeURIComponent,
     encryptText: encryptTongrenKeyword,
     openUrl: (encryptedText: string, num: string) => decryptTongrenOpenUrl(encryptedText, num, context.source),
+    getArguments: (value: string, key?: string) => key ? (parseArguments(value)[key] || '') : parseArguments(value),
     console: { log: () => undefined },
   };
-  const body = code.replace(/^@js:/, '').trim();
+  const body = unwrapJsRule(code);
   try {
     const script = new vm.Script(`(function(){ ${body}\n})()`);
     const result = script.runInNewContext(sandbox, { timeout });
-    const value = jsonPrimitiveToString(result ?? sandbox.result ?? '');
-    if (value) return value;
+    if (result !== undefined && result !== null && result !== '') return result;
+    if (sandbox.result !== context.result && sandbox.result !== undefined && sandbox.result !== null && sandbox.result !== '') return sandbox.result;
   } catch {
     // 如果 @js 后面是单个表达式（例如 header: @js:JSON.stringify({...})），上面的函数体不会自动返回。
   }
   try {
+    const script = new vm.Script(`(function(){ ${body}
+; if (typeof result !== 'undefined') return result; if (typeof res !== 'undefined') return res; return ''; })()`);
+    const result = script.runInNewContext(sandbox, { timeout });
+    if (result !== undefined && result !== null && result !== '') return result;
+  } catch {
+    // fallback to expression mode below
+  }
+  try {
     const script = new vm.Script(`(function(){ return (${body}); })()`);
     const result = script.runInNewContext(sandbox, { timeout });
-    return jsonPrimitiveToString(result ?? sandbox.result ?? '');
+    if (result !== undefined && result !== null && result !== '') return result;
+    if (sandbox.result !== context.result && sandbox.result !== undefined && sandbox.result !== null && sandbox.result !== '') return sandbox.result;
+    return '';
   } catch {
     return '';
   }
+}
+
+function runJsSnippet(code: string, context: Record<string, any>, timeout = 1000): string {
+  return jsonPrimitiveToString(runJsSnippetRaw(code, context, timeout));
 }
 
 function applyPutGetRules(rule: string, value: string) {
@@ -242,7 +305,7 @@ function applyPutGetRules(rule: string, value: string) {
 function buildUrlFromTemplate(template: string, source: BookSource, keyword?: string, page = 1, baseOverride?: string) {
   const base = baseOverride || sourceBase(source);
   let raw = template || base;
-  if (raw.trim().startsWith('@js:')) {
+  if (/^(?:@js:|<js>)/i.test(raw.trim())) {
     if (/\/k-\{\{encryptText\(key\)\}\}-\{\{page\}\}\.html/.test(raw)) {
       return `https://www.rrssk.com/k-${encryptTongrenKeyword(keyword || '')}-${page}.html`;
     }
@@ -360,10 +423,31 @@ function ruleIsJson(rule?: string) {
 }
 
 function selectJsonItems(json: any, rule?: string): any[] {
-  const reverse = !!rule?.trim().startsWith('-');
-  const value = readJsonPath(json, rule);
-  const list = Array.isArray(value) ? value : value ? [value] : [];
-  return reverse ? [...list].reverse() : list;
+  const alternatives = splitAlternatives(rule);
+  for (let index = 0; index < alternatives.length; index += 1) {
+    const alternative = alternatives[index];
+    const reverse = alternative.trim().startsWith('-');
+    const value = readJsonPath(json, alternative);
+    if (Array.isArray(value) && value.length > 0) return reverse ? [...value].reverse() : value;
+    // 备用 JSONPath 常见写法：$.data||$.data.data[*]。前者可能是分页包装对象，优先继续尝试后续数组规则。
+    if (value && typeof value === 'object' && index === alternatives.length - 1) return [value];
+    if (value && typeof value !== 'object') return [value];
+  }
+  return [];
+}
+
+function evaluateJsListRule(rule: string | undefined, context: Record<string, any>): any[] {
+  const trimmed = (rule || '').trim();
+  if (!/^(?:@js:|<js>)/i.test(trimmed)) return [];
+  const value = runJsSnippetRaw(trimmed, context);
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === 'object') return [value];
+  if (typeof value === 'string') {
+    const parsed = parseJsonMaybe(value);
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && typeof parsed === 'object') return [parsed];
+  }
+  return [];
 }
 
 function renderTemplateWithJson(template: string, json: any, source: BookSource, baseUrl: string) {
@@ -379,7 +463,7 @@ function readJsonRule(json: any, rule?: string, source?: BookSource, baseUrl?: s
   if (!rule) return '';
   const trimmed = rule.trim();
   if (trimmed.includes('{{')) return renderTemplateWithJson(trimmed, json, source as BookSource, baseUrl || sourceBase(source as BookSource));
-  if (trimmed.startsWith('@js:')) {
+  if (/^(?:@js:|<js>)/i.test(trimmed)) {
     if (/result\s*=\s*['"]([^'"]+)['"]\s*\+\s*result\.([A-Za-z0-9_$-]+)/.test(trimmed)) {
       const match = trimmed.match(/result\s*=\s*['"]([^'"]+)['"]\s*\+\s*result\.([A-Za-z0-9_$-]+)/);
       return normalizeUrl(baseUrl || sourceBase(source as BookSource), `${match?.[1] || ''}${jsonPrimitiveToString(json?.[match?.[2] || ''])}`);
@@ -514,11 +598,11 @@ function stripFilters(rule: string) {
 
 function applyLegadoIndexSelector(current: cheerio.Cheerio<any>, selector: string): { current: cheerio.Cheerio<any>; selector: string } {
   let normalized = selector.trim();
-  const exclude = normalized.match(/\[!(-?\d+)\]$/);
+  const exclude = normalized.match(/(?:\[!(-?\d+)\]|!(-?\d+))$/);
   if (exclude) {
     normalized = normalized.slice(0, exclude.index).trim();
     current = normalized ? current.find(normalized) : current;
-    const idx = Number(exclude[1]);
+    const idx = Number(exclude[1] ?? exclude[2]);
     const real = idx < 0 ? current.length + idx : idx;
     return { current: current.filter((index) => index !== real), selector: '' };
   }
@@ -574,24 +658,31 @@ function applyLegadoSelector($: cheerio.CheerioAPI, current: cheerio.Cheerio<any
 }
 
 function selectElements($: cheerio.CheerioAPI, root: cheerio.Cheerio<any>, rule?: string): cheerio.Cheerio<any> {
-  const normalized = stripFilters(rule || '');
-  const reverse = normalized.trim().startsWith('-') && !normalized.trim().startsWith('-@');
-  const effective = reverse ? normalized.trim().slice(1).trim() : normalized;
-  if (!effective) return root;
-  const steps = effective.split(/&&|@css:/).map((item) => item.trim()).filter(Boolean);
-  let current = root;
-  for (const rawStep of steps) {
-    const { selector, attr } = parseStep(rawStep);
-    if (attr) break;
-    if (!selector) continue;
-    if (/^children$/i.test(selector)) {
-      current = current.children();
+  for (const alternative of splitAlternatives(rule)) {
+    try {
+      const normalized = stripFilters(alternative || '');
+      const reverse = normalized.trim().startsWith('-') && !normalized.trim().startsWith('-@');
+      const effective = reverse ? normalized.trim().slice(1).trim() : normalized;
+      if (!effective) continue;
+      const steps = effective.split(/&&|@css:/).map((item) => item.trim()).filter(Boolean);
+      let current = root;
+      for (const rawStep of steps) {
+        const { selector, attr } = parseStep(rawStep);
+        if (attr) break;
+        if (!selector) continue;
+        if (/^children$/i.test(selector)) {
+          current = current.children();
+          continue;
+        }
+        current = applyLegadoSelector($, current, selector);
+      }
+      if (reverse) current = $(current.toArray().reverse());
+      if (current.length > 0) return current;
+    } catch {
       continue;
     }
-    current = applyLegadoSelector($, current, selector);
   }
-  if (reverse) current = $(current.toArray().reverse());
-  return current;
+  return cheerio.load('')('');
 }
 
 
@@ -752,7 +843,25 @@ function applyBookInfoInit($: cheerio.CheerioAPI, root: cheerio.Cheerio<any>, in
 }
 
 function applyContentJsRule(value: string, jsRule: string): string {
-  if (/result\.split\(["']\\n["']\)|<img\s+src=/.test(jsRule)) {
+  if (/window\.comicInfo/.test(value)) {
+    try {
+      const match = value.match(/window\.comicInfo\s*=\s*(.*?)(?:,window\.hideguide|;|<\/script>)/);
+      if (match?.[1]) {
+        const comicInfo = new vm.Script(`(${match[1]})`).runInNewContext({}, { timeout: 1000 });
+        const images = comicInfo?.current_chapter?.chapter_img_list;
+        if (Array.isArray(images)) {
+          return images
+            .map((src) => String(src || '').replace(/^\/\//, 'https://'))
+            .filter(Boolean)
+            .map((src) => `<img src="${src}" style="max-width:100%; display:block;" referrerpolicy="no-referrer">`)
+            .join('\n');
+        }
+      }
+    } catch {
+      // fallback to generic JS execution below
+    }
+  }
+  if (/result\.split\(["']\\n["']\)/.test(jsRule)) {
     return value
       .split(/\n+/)
       .map((item) => item.trim())
@@ -774,8 +883,8 @@ function contentFromRule(raw: string, rule?: string, baseUrl?: string): string {
   const jsRule = jsIndex >= 0 ? rawRule.slice(jsIndex + 4).trim() : '';
   const $ = cheerio.load(raw);
   if (jsRule) {
-    const values = readValues($, $.root(), selectorRule, baseUrl);
-    const value = values.length > 0 ? values.join('\n') : readValue($, $.root(), selectorRule, baseUrl);
+    const values = selectorRule ? readValues($, $.root(), selectorRule, baseUrl) : [];
+    const value = selectorRule ? (values.length > 0 ? values.join('\n') : readValue($, $.root(), selectorRule, baseUrl)) : raw;
     return applyContentJsRule(value, jsRule);
   }
   return readValue($, $.root(), selectorRule, baseUrl);
@@ -913,7 +1022,19 @@ function splitUrlOptions(input: string): RequestOptions {
       retry: Number.isFinite(Number(options.retry)) ? Number(options.retry) : undefined,
     };
   } catch {
-    return { url: raw };
+    try {
+      const options = JSON.parse(candidate.replace(/'/g, '"'));
+      return {
+        url: raw.slice(0, comma).trim(),
+        method: options.method,
+        body: options.body,
+        headers: options.headers && typeof options.headers === 'object' ? options.headers : undefined,
+        charset: options.charset,
+        retry: Number.isFinite(Number(options.retry)) ? Number(options.retry) : undefined,
+      };
+    } catch {
+      return { url: raw.slice(0, comma).trim() };
+    }
   }
 }
 
@@ -1086,6 +1207,16 @@ function buildExploreTargetUrl(source: BookSource, target: ExploreTarget) {
 async function resolveExploreCategories(source: BookSource, rule: LegadoBookSourceRule): Promise<Array<{ title: string; template: string }>> {
   const raw = (rule.exploreUrl || '').trim();
   if (!raw.startsWith('@js:')) return parseExploreUrl(raw);
+
+  const jsValue = runJsSnippetRaw(raw, { baseUrl: sourceBase(source), source: rule });
+  const parsed = Array.isArray(jsValue) ? jsValue : typeof jsValue === 'string' ? parseJsonMaybe(jsValue) : null;
+  if (Array.isArray(parsed)) {
+    const categories = parsed
+      .map((item) => ({ title: jsonPrimitiveToString(item?.title), template: jsonPrimitiveToString(item?.url) || `__group__:${jsonPrimitiveToString(item?.title)}` }))
+      .filter((item) => !!item.title);
+    if (categories.length > 0) return categories;
+  }
+
   try {
     const html = await fetchText(source, sourceBase(source));
     const $ = cheerio.load(html);
@@ -1412,7 +1543,17 @@ export class LegadoClient {
     const html = await fetchText(source, targetUrl);
     const chapters: BookChapter[] = [];
     const json = parseJsonMaybe(html);
-    if (json && ruleIsJson(rule.ruleToc.chapterList)) {
+    const jsItems = evaluateJsListRule(rule.ruleToc.chapterList, { result: html, src: html, baseUrl: targetUrl, source: rule });
+    if (jsItems.length > 0) {
+      jsItems.forEach((item, index) => {
+        const title = readJsonRule(item, rule.ruleToc?.chapterName, source, targetUrl) || `第 ${index + 1} 章`;
+        const href = readJsonRule(item, rule.ruleToc?.chapterUrl, source, targetUrl)
+          || fallbackChapterHrefFromItem(item, rule.ruleToc?.chapterUrl, targetUrl);
+        if (!href) return;
+        const normalizedHref = normalizeUrl(targetUrl, href);
+        chapters.push({ id: stableId(`${source.id}|${normalizedHref}`), title, href: normalizedHref, order: index });
+      });
+    } else if (json && ruleIsJson(rule.ruleToc.chapterList)) {
       const items = selectJsonItems(json, rule.ruleToc.chapterList);
       items.forEach((item, index) => {
         const title = readJsonRule(item, rule.ruleToc?.chapterName, source, targetUrl) || `第 ${index + 1} 章`;
