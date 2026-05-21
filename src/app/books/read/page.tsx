@@ -129,6 +129,7 @@ const DEFAULT_TTS_SETTINGS: TtsSettings = {
   autoPlayNext: true,
 };
 const SAVE_INTERVAL_MS = 10000;
+const CHAPTER_SAVE_INTERVAL_MS = 20000;
 const TTS_RATE_STEPS = [-20, -10, 0, 10, 20, 35];
 const TTS_PITCH_STEPS = [-10, 0, 10, 20];
 const TTS_VOLUME_STEPS = [-10, 0, 10, 20];
@@ -310,6 +311,21 @@ function computeScrolledTargetScrollTop(position: ScrolledReadingPosition, curre
   return ratio * maxCurrent;
 }
 
+function encodeChapterScrollLocator(href: string, scrollTop: number, scrollHeight: number, clientHeight: number) {
+  const maxScrollTop = Math.max(0, scrollHeight - clientHeight);
+  const ratio = maxScrollTop > 0 ? Math.max(0, Math.min(1, scrollTop / maxScrollTop)) : 0;
+  return `${href}#scroll=${ratio.toFixed(6)}`;
+}
+
+function parseChapterScrollLocator(value?: string) {
+  if (!value) return null;
+  const match = value.match(/(?:^|[#&?])scroll=([0-9.]+)/);
+  if (!match) return null;
+  const ratio = Number(match[1]);
+  if (!Number.isFinite(ratio)) return null;
+  return Math.max(0, Math.min(1, ratio));
+}
+
 function flattenToc(items: TocItem[]): TocItem[] {
   return items.flatMap((item) => [item, ...flattenToc(item.subitems || [])]);
 }
@@ -415,6 +431,12 @@ function ChapterReader({ manifest }: { manifest: BookReadManifest }) {
   const [ttsSeekValue, setTtsSeekValue] = useState(0);
   const [ttsSeeking, setTtsSeeking] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const restoredChapterPositionRef = useRef(false);
+  const chapterSaveTimerRef = useRef<number | null>(null);
+  const pendingChapterRestoreRatioRef = useRef<number | null>(null);
+  const currentIndexRef = useRef(0);
+  const lastChapterSavedAtRef = useRef(0);
+  const lastChapterSavedLocatorValueRef = useRef(manifest.lastRecord?.locator?.value || '');
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const ttsChunksRef = useRef<TtsChunk[]>([]);
   const ttsCurrentChunkIndexRef = useRef(0);
@@ -424,6 +446,8 @@ function ChapterReader({ manifest }: { manifest: BookReadManifest }) {
   const ttsResumeTimeRef = useRef(0);
   const currentChapterHref = chapters[currentIndex]?.href || '';
   const currentChapterTitle = chapters[currentIndex]?.title || chapter?.title || '';
+
+  useEffect(() => { currentIndexRef.current = currentIndex; }, [currentIndex]);
 
   useEffect(() => {
     setSettings(loadReaderSettings());
@@ -500,6 +524,61 @@ function ChapterReader({ manifest }: { manifest: BookReadManifest }) {
     return () => { cancelled = true; };
   }, []);
 
+  const buildChapterReadRecord = useCallback((item: BookChapter, index: number): BookReadRecord => {
+    const node = scrollRef.current;
+    const scrollTop = node?.scrollTop || 0;
+    const scrollHeight = node?.scrollHeight || 0;
+    const clientHeight = node?.clientHeight || 0;
+    const chapterCount = Math.max(1, chapters.length);
+    const maxScrollTop = Math.max(0, scrollHeight - clientHeight);
+    const chapterRatio = maxScrollTop > 0 ? Math.max(0, Math.min(1, scrollTop / maxScrollTop)) : 0;
+    const progressPercent = chapters.length > 0
+      ? Math.max(0, Math.min(100, ((index + chapterRatio) / chapterCount) * 100))
+      : 0;
+
+    return {
+      sourceId: manifest.book.sourceId,
+      sourceName: manifest.book.sourceName,
+      bookId: manifest.book.id,
+      title: manifest.book.title,
+      author: manifest.book.author,
+      cover: manifest.book.cover,
+      detailHref: manifest.book.detailHref,
+      acquisitionHref: manifest.acquisitionHref,
+      format: 'chapters',
+      locator: {
+        type: 'chapter',
+        value: encodeChapterScrollLocator(item.href, scrollTop, scrollHeight, clientHeight),
+        href: item.href,
+        chapterTitle: item.title,
+      },
+      chapterTitle: item.title,
+      chapterHref: item.href,
+      progressPercent,
+      saveTime: Date.now(),
+    };
+  }, [chapters.length, manifest]);
+
+  const persistChapterProgress = useCallback((index = currentIndexRef.current) => {
+    const item = chapters[index];
+    if (!item) return;
+    const record = buildChapterReadRecord(item, index);
+    if (record.locator.value === lastChapterSavedLocatorValueRef.current) return;
+    lastChapterSavedLocatorValueRef.current = record.locator.value;
+    lastChapterSavedAtRef.current = Date.now();
+    void saveBookReadRecord(record.sourceId, record.bookId, record);
+  }, [buildChapterReadRecord, chapters]);
+
+  const scheduleChapterProgressSave = useCallback(() => {
+    if (chapterSaveTimerRef.current) return;
+    const elapsed = Date.now() - lastChapterSavedAtRef.current;
+    const delay = Math.max(0, CHAPTER_SAVE_INTERVAL_MS - elapsed);
+    chapterSaveTimerRef.current = window.setTimeout(() => {
+      chapterSaveTimerRef.current = null;
+      persistChapterProgress();
+    }, delay);
+  }, [persistChapterProgress]);
+
   useEffect(() => {
     if (!manifest.chaptersUrl && !manifest.book.id) return;
     let cancelled = false;
@@ -507,6 +586,10 @@ function ChapterReader({ manifest }: { manifest: BookReadManifest }) {
     setChaptersLoaded(false);
     setChapter(null);
     setCurrentIndex(0);
+    restoredChapterPositionRef.current = false;
+    pendingChapterRestoreRatioRef.current = null;
+    lastChapterSavedAtRef.current = 0;
+    lastChapterSavedLocatorValueRef.current = manifest.lastRecord?.locator?.value || '';
     setLoading(true);
     setError('');
     const url = manifest.chaptersUrl || `/api/books/read/chapters?sourceId=${encodeURIComponent(manifest.book.sourceId)}&bookId=${encodeURIComponent(manifest.book.id)}`;
@@ -516,7 +599,7 @@ function ChapterReader({ manifest }: { manifest: BookReadManifest }) {
         const list = (json.chapters || []) as BookChapter[];
         setChapters(list);
         setChaptersLoaded(true);
-        const savedHref = initialChapterHref || manifest.lastRecord?.chapterHref || manifest.lastRecord?.locator?.href || manifest.lastRecord?.locator?.value || '';
+        const savedHref = initialChapterHref || manifest.lastRecord?.chapterHref || manifest.lastRecord?.locator?.href || manifest.lastRecord?.locator?.value?.split('#scroll=')[0] || '';
         const savedIndex = list.findIndex((item) => item.href === savedHref);
         setCurrentIndex(savedIndex >= 0 ? savedIndex : 0);
       })
@@ -534,33 +617,20 @@ function ChapterReader({ manifest }: { manifest: BookReadManifest }) {
     setLoading(true);
     setError('');
     scrollRef.current?.scrollTo({ top: 0, behavior: 'auto' });
+    pendingChapterRestoreRatioRef.current = null;
     const params = new URLSearchParams({ sourceId: manifest.book.sourceId, href: item.href });
     if (manifest.acquisitionHref) params.set('tocHref', manifest.acquisitionHref);
     fetchJsonWithRetry<BookChapterContent>(`/api/books/read/chapter?${params.toString()}`, { cache: 'no-store' })
       .then((json) => {
+        const shouldRestore = !restoredChapterPositionRef.current
+          && !initialChapterHref
+          && (manifest.lastRecord?.chapterHref === item.href || manifest.lastRecord?.locator?.href === item.href);
+        pendingChapterRestoreRatioRef.current = shouldRestore ? parseChapterScrollLocator(manifest.lastRecord?.locator?.value) : null;
         setChapter({ ...(json as BookChapterContent), title: (json as BookChapterContent).title || item.title });
-        const progressPercent = chapters.length > 0 ? Math.round(((currentIndex + 1) / chapters.length) * 100) : 0;
-        const record: BookReadRecord = {
-          sourceId: manifest.book.sourceId,
-          sourceName: manifest.book.sourceName,
-          bookId: manifest.book.id,
-          title: manifest.book.title,
-          author: manifest.book.author,
-          cover: manifest.book.cover,
-          detailHref: manifest.book.detailHref,
-          acquisitionHref: manifest.acquisitionHref,
-          format: 'chapters',
-          locator: { type: 'chapter', value: item.href, href: item.href, chapterTitle: item.title },
-          chapterTitle: item.title,
-          chapterHref: item.href,
-          progressPercent,
-          saveTime: Date.now(),
-        };
-        void saveBookReadRecord(record.sourceId, record.bookId, record);
       })
       .catch((err) => setError(err.message || '获取章节失败'))
       .finally(() => setLoading(false));
-  }, [chapters, chaptersLoaded, currentIndex, manifest, stopTts]);
+  }, [chapters, chaptersLoaded, currentIndex, initialChapterHref, manifest, persistChapterProgress, stopTts]);
 
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('books-read-update-header', {
@@ -572,8 +642,14 @@ function ChapterReader({ manifest }: { manifest: BookReadManifest }) {
     }));
   }, [manifest, currentChapterTitle, settings.mode]);
 
-  const goPrevChapter = useCallback(() => setCurrentIndex((prev) => Math.max(0, prev - 1)), []);
-  const goNextChapter = useCallback(() => setCurrentIndex((prev) => Math.min(chapters.length - 1, prev + 1)), [chapters.length]);
+  const goPrevChapter = useCallback(() => {
+    persistChapterProgress();
+    setCurrentIndex((prev) => Math.max(0, prev - 1));
+  }, [persistChapterProgress]);
+  const goNextChapter = useCallback(() => {
+    persistChapterProgress();
+    setCurrentIndex((prev) => Math.min(chapters.length - 1, prev + 1));
+  }, [chapters.length, persistChapterProgress]);
 
   const turnPage = useCallback((direction: 1 | -1) => {
     const node = scrollRef.current;
@@ -684,6 +760,68 @@ function ChapterReader({ manifest }: { manifest: BookReadManifest }) {
   }, [bootstrapTts, ttsAvailable, ttsStatus]);
 
   useEffect(() => {
+    if (loading || !chapter || restoredChapterPositionRef.current) return;
+    const savedRatio = pendingChapterRestoreRatioRef.current;
+    if (savedRatio === null) {
+      restoredChapterPositionRef.current = true;
+      persistChapterProgress();
+      return;
+    }
+
+    let cancelled = false;
+    const restore = (attempt = 0) => {
+      if (cancelled) return;
+      const node = scrollRef.current;
+      if (!node) {
+        if (attempt < 20) window.setTimeout(() => restore(attempt + 1), 100);
+        return;
+      }
+      const maxScrollTop = Math.max(0, node.scrollHeight - node.clientHeight);
+      if (maxScrollTop <= 0 && attempt < 20) {
+        window.setTimeout(() => restore(attempt + 1), 100);
+        return;
+      }
+      node.scrollTo({ top: maxScrollTop * savedRatio, behavior: 'auto' });
+      restoredChapterPositionRef.current = true;
+      pendingChapterRestoreRatioRef.current = null;
+      window.setTimeout(() => persistChapterProgress(), 0);
+    };
+
+    window.requestAnimationFrame(() => restore());
+    return () => {
+      cancelled = true;
+    };
+  }, [chapter, loading, persistChapterProgress]);
+
+  useEffect(() => {
+    const node = scrollRef.current;
+    if (!node) return;
+    node.addEventListener('scroll', scheduleChapterProgressSave, { passive: true });
+    return () => {
+      node.removeEventListener('scroll', scheduleChapterProgressSave);
+      if (chapterSaveTimerRef.current) {
+        window.clearTimeout(chapterSaveTimerRef.current);
+        chapterSaveTimerRef.current = null;
+      }
+      persistChapterProgress();
+    };
+  }, [chapter, currentChapterHref, loading, persistChapterProgress, scheduleChapterProgressSave]);
+
+  useEffect(() => {
+    const flush = () => persistChapterProgress();
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      flush();
+      window.removeEventListener('pagehide', flush);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [persistChapterProgress]);
+
+  useEffect(() => {
     if (!audioRef.current) audioRef.current = new Audio();
     const audio = audioRef.current;
     const handleEnded = () => {
@@ -757,7 +895,7 @@ function ChapterReader({ manifest }: { manifest: BookReadManifest }) {
             <div className='space-y-2 p-4'>
               {chapters.map((item, index) => {
                 const active = index === currentIndex;
-                return <button key={`${item.href}-${item.order}-${index}`} onClick={() => { setCurrentIndex(index); setTocOpen(false); }} className={`block w-full rounded-2xl px-4 py-3 text-left text-sm transition ${active ? 'bg-sky-600 text-white' : 'text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-900'}`} title={item.title}>{item.title}</button>;
+                return <button key={`${item.href}-${item.order}-${index}`} onClick={() => { persistChapterProgress(); setCurrentIndex(index); setTocOpen(false); }} className={`block w-full rounded-2xl px-4 py-3 text-left text-sm transition ${active ? 'bg-sky-600 text-white' : 'text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-900'}`} title={item.title}>{item.title}</button>;
               })}
             </div>
           </div>
