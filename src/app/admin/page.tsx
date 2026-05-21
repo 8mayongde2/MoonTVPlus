@@ -3155,6 +3155,11 @@ const OpenListConfigComponent = ({
   const [password, setPassword] = useState('');
   const [rootPaths, setRootPaths] = useState<string[]>(['/']);
   const [offlineDownloadPath, setOfflineDownloadPath] = useState('/');
+  const [offlineDownloadUseCustomSource, setOfflineDownloadUseCustomSource] =
+    useState(false);
+  const [offlineDownloadUrl, setOfflineDownloadUrl] = useState('');
+  const [offlineDownloadUsername, setOfflineDownloadUsername] = useState('');
+  const [offlineDownloadPassword, setOfflineDownloadPassword] = useState('');
   const [scanInterval, setScanInterval] = useState(0);
   const [scanMode, setScanMode] = useState<'torrent' | 'name' | 'hybrid'>(
     'hybrid'
@@ -3183,6 +3188,16 @@ const OpenListConfigComponent = ({
             : ['/'])
       );
       setOfflineDownloadPath(config.OpenListConfig.OfflineDownloadPath || '/');
+      setOfflineDownloadUseCustomSource(
+        config.OpenListConfig.OfflineDownloadUseCustomSource || false
+      );
+      setOfflineDownloadUrl(config.OpenListConfig.OfflineDownloadURL || '');
+      setOfflineDownloadUsername(
+        config.OpenListConfig.OfflineDownloadUsername || ''
+      );
+      setOfflineDownloadPassword(
+        config.OpenListConfig.OfflineDownloadPassword || ''
+      );
       setScanInterval(config.OpenListConfig.ScanInterval || 0);
       setScanMode(config.OpenListConfig.ScanMode || 'hybrid');
       setDisableVideoPreview(
@@ -3233,6 +3248,10 @@ const OpenListConfigComponent = ({
             Password: password,
             RootPaths: rootPaths,
             OfflineDownloadPath: offlineDownloadPath,
+            OfflineDownloadUseCustomSource: offlineDownloadUseCustomSource,
+            OfflineDownloadURL: offlineDownloadUrl,
+            OfflineDownloadUsername: offlineDownloadUsername,
+            OfflineDownloadPassword: offlineDownloadPassword,
             ScanInterval: scanInterval,
             ScanMode: scanMode,
             DisableVideoPreview: disableVideoPreview,
@@ -3590,6 +3609,92 @@ const OpenListConfigComponent = ({
           <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
             动漫磁力等离线下载任务的保存目录，默认为根目录 /
           </p>
+        </div>
+
+        <div className='space-y-4 rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800'>
+          <div className='flex items-center justify-between'>
+            <div>
+              <h3 className='text-sm font-medium text-gray-900 dark:text-gray-100'>
+                离线下载使用独立 OpenList 源
+              </h3>
+              <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
+                开启后，存到私人影库和追番订阅会把任务提交到下方 OpenList，扫描和播放仍使用上方主 OpenList
+              </p>
+            </div>
+            <button
+              type='button'
+              onClick={() =>
+                setOfflineDownloadUseCustomSource(
+                  !offlineDownloadUseCustomSource
+                )
+              }
+              disabled={!enabled}
+              className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+                offlineDownloadUseCustomSource
+                  ? 'bg-blue-600'
+                  : 'bg-gray-200 dark:bg-gray-700'
+              } ${!enabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  offlineDownloadUseCustomSource
+                    ? 'translate-x-6'
+                    : 'translate-x-1'
+                }`}
+              />
+            </button>
+          </div>
+
+          {offlineDownloadUseCustomSource && (
+            <div className='space-y-4'>
+              <div>
+                <label className='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2'>
+                  离线下载 OpenList URL
+                </label>
+                <input
+                  type='text'
+                  value={offlineDownloadUrl}
+                  onChange={(e) => setOfflineDownloadUrl(e.target.value)}
+                  disabled={!enabled}
+                  placeholder='https://download-openlist-server.com'
+                  className='w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed'
+                />
+              </div>
+
+              <div className='grid grid-cols-2 gap-4'>
+                <div>
+                  <label className='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2'>
+                    离线下载账号
+                  </label>
+                  <input
+                    type='text'
+                    value={offlineDownloadUsername}
+                    onChange={(e) =>
+                      setOfflineDownloadUsername(e.target.value)
+                    }
+                    disabled={!enabled}
+                    placeholder='admin'
+                    className='w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed'
+                  />
+                </div>
+                <div>
+                  <label className='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2'>
+                    离线下载密码
+                  </label>
+                  <input
+                    type='password'
+                    value={offlineDownloadPassword}
+                    onChange={(e) =>
+                      setOfflineDownloadPassword(e.target.value)
+                    }
+                    disabled={!enabled}
+                    placeholder='password'
+                    className='w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed'
+                  />
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         <div>

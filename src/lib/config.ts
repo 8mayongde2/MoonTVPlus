@@ -558,6 +558,29 @@ export function configSelfCheck(adminConfig: AdminConfig): AdminConfig {
   }
   adminConfig.LiveRefreshIntervalHours = normalizeLiveRefreshIntervalHours(adminConfig.LiveRefreshIntervalHours);
 
+  if (adminConfig.OpenListConfig) {
+    if (!adminConfig.OpenListConfig.RootPaths) {
+      adminConfig.OpenListConfig.RootPaths = adminConfig.OpenListConfig.RootPath
+        ? [adminConfig.OpenListConfig.RootPath]
+        : ['/'];
+    }
+    if (!adminConfig.OpenListConfig.OfflineDownloadPath) {
+      adminConfig.OpenListConfig.OfflineDownloadPath = '/';
+    }
+    if (adminConfig.OpenListConfig.OfflineDownloadUseCustomSource === undefined) {
+      adminConfig.OpenListConfig.OfflineDownloadUseCustomSource = false;
+    }
+    if (adminConfig.OpenListConfig.OfflineDownloadURL === undefined) {
+      adminConfig.OpenListConfig.OfflineDownloadURL = '';
+    }
+    if (adminConfig.OpenListConfig.OfflineDownloadUsername === undefined) {
+      adminConfig.OpenListConfig.OfflineDownloadUsername = '';
+    }
+    if (adminConfig.OpenListConfig.OfflineDownloadPassword === undefined) {
+      adminConfig.OpenListConfig.OfflineDownloadPassword = '';
+    }
+  }
+
   // 用户信息已迁移到新版数据库
   // 这里只保留站长用户用于兼容性，其他用户从数据库读取
   const ownerUser = process.env.USERNAME;

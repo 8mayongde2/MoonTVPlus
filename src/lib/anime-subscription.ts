@@ -5,7 +5,11 @@ import { parseStringPromise } from 'xml2js';
 import { getConfig, setCachedConfig } from '@/lib/config';
 import { db, getStorage } from '@/lib/db';
 import { EmailService } from '@/lib/email.service';
-import { OpenListClient } from '@/lib/openlist.client';
+import {
+  addOpenListOfflineDownload,
+  getOfflineDownloadBasePath,
+  joinOpenListPath,
+} from '@/lib/openlist-offline-download';
 import { AnimeSubscription, AnimeSubscriptionDownloadTool } from '@/types/anime-subscription';
 
 const downloadTools: AnimeSubscriptionDownloadTool[] = ['aria2', 'qBittorrent', 'Transmission'];
@@ -128,50 +132,11 @@ export async function addOfflineDownload(
   downloadPath: string
 ) {
   const config = await getConfig();
-  const openlistConfig = config.OpenListConfig;
   const downloadTool = getAnimeSubscriptionDownloadTool(
     config.AnimeSubscriptionConfig?.DownloadTool
   );
 
-  if (!openlistConfig?.Enabled) {
-    throw new Error('私人影库功能未启用');
-  }
-
-  if (
-    !openlistConfig.URL ||
-    !openlistConfig.Username ||
-    !openlistConfig.Password
-  ) {
-    throw new Error('OpenList 配置不完整');
-  }
-
-  const client = new OpenListClient(
-    openlistConfig.URL,
-    openlistConfig.Username,
-    openlistConfig.Password
-  );
-
-  const token = await (client as any).getToken();
-  const openlistUrl = `${openlistConfig.URL.replace(/\/$/, '')}/api/fs/add_offline_download`;
-
-  const response = await fetch(openlistUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: token,
-    },
-    body: JSON.stringify({
-      path: downloadPath,
-      urls: [torrentUrl],
-      tool: downloadTool,
-    }),
-  });
-
-  const data = await response.json();
-
-  if (!response.ok || data.code !== 200) {
-    throw new Error(data.message || '添加离线下载任务失败');
-  }
+  await addOpenListOfflineDownload(config, downloadPath, torrentUrl, downloadTool);
 }
 
 /**
@@ -306,9 +271,7 @@ async function sendAnimeUpdateNotifications(
  */
 export async function checkSubscription(subscription: AnimeSubscription) {
   const config = await getConfig();
-  const openlistConfig = config.OpenListConfig;
-
-  if (!openlistConfig?.OfflineDownloadPath) {
+  if (!config.OpenListConfig?.OfflineDownloadPath) {
     throw new Error('OpenList 离线下载路径未配置');
   }
 
@@ -329,7 +292,10 @@ export async function checkSubscription(subscription: AnimeSubscription) {
   const downloaded = [];
   for (const item of newEpisodes) {
     try {
-      const downloadPath = `${openlistConfig.OfflineDownloadPath.replace(/\/$/, '')}/${subscription.title}`;
+      const downloadPath = joinOpenListPath(
+        getOfflineDownloadBasePath(config),
+        subscription.title
+      );
       await addOfflineDownload(item.torrentUrl, downloadPath);
 
       // 成功后更新 lastEpisode
