@@ -38,6 +38,7 @@ import { createPortal } from 'react-dom';
 
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import { clearAllDanmakuCache, getDanmakuCacheStats } from '@/lib/danmaku/api';
+import { clearBangumiImageFallbackCache } from '@/lib/utils';
 import { CURRENT_VERSION } from '@/lib/version';
 import { UpdateStatus } from '@/lib/version_check';
 
@@ -152,6 +153,11 @@ export const UserMenu: React.FC = () => {
   );
   const [doubanDataSourceBackup, setDoubanDataSourceBackup] =
     useState('direct');
+  const [animeDataSource, setAnimeDataSource] = useState('direct');
+  const [animeDataSourceBackup, setAnimeDataSourceBackup] =
+    useState('server-proxy');
+  const [animeCustomBaseUrl, setAnimeCustomBaseUrl] = useState('');
+  const [animeImageBaseUrl, setAnimeImageBaseUrl] = useState('');
   const [doubanImageProxyType, setDoubanImageProxyType] = useState(
     'cmliussss-cdn-tencent'
   );
@@ -163,6 +169,9 @@ export const UserMenu: React.FC = () => {
     useState('');
   const [isDoubanDropdownOpen, setIsDoubanDropdownOpen] = useState(false);
   const [isDoubanBackupDropdownOpen, setIsDoubanBackupDropdownOpen] =
+    useState(false);
+  const [isAnimeDropdownOpen, setIsAnimeDropdownOpen] = useState(false);
+  const [isAnimeBackupDropdownOpen, setIsAnimeBackupDropdownOpen] =
     useState(false);
   const [isDoubanImageProxyDropdownOpen, setIsDoubanImageProxyDropdownOpen] =
     useState(false);
@@ -275,6 +284,12 @@ export const UserMenu: React.FC = () => {
     },
     { value: 'cmliussss-cdn-ali', label: '豆瓣 CDN By CMLiussss（阿里云）' },
     { value: 'custom', label: '自定义代理' },
+  ];
+
+  const animeDataSourceOptions = [
+    { value: 'direct', label: '直连（浏览器直连 Bangumi）' },
+    { value: 'server-proxy', label: '服务器代理（由服务器访问 Bangumi）' },
+    { value: 'custom-baseurl', label: '自定义 Base URL' },
   ];
 
   // 豆瓣图片代理选项
@@ -583,6 +598,23 @@ export const UserMenu: React.FC = () => {
         'doubanProxyUrlBackup'
       );
       setDoubanProxyUrlBackup(savedDoubanProxyUrlBackup || '');
+
+      const savedAnimeDataSource = localStorage.getItem('animeDataSource');
+      const defaultAnimeDataSource =
+        (window as any).RUNTIME_CONFIG?.BANGUMI_DATA_SOURCE || 'direct';
+      setAnimeDataSource(savedAnimeDataSource || defaultAnimeDataSource);
+
+      const savedAnimeDataSourceBackup = localStorage.getItem(
+        'animeDataSourceBackup'
+      );
+      setAnimeDataSourceBackup(savedAnimeDataSourceBackup || 'server-proxy');
+
+      const savedAnimeCustomBaseUrl =
+        localStorage.getItem('animeCustomBaseUrl');
+      setAnimeCustomBaseUrl(savedAnimeCustomBaseUrl || '');
+
+      const savedAnimeImageBaseUrl = localStorage.getItem('animeImageBaseUrl');
+      setAnimeImageBaseUrl(savedAnimeImageBaseUrl || '');
 
       const savedDoubanImageProxyType = localStorage.getItem(
         'doubanImageProxyType'
@@ -975,6 +1007,40 @@ export const UserMenu: React.FC = () => {
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
+      if (isAnimeDropdownOpen) {
+        const target = event.target as Element;
+        if (!target.closest('[data-dropdown="anime-datasource"]')) {
+          setIsAnimeDropdownOpen(false);
+        }
+      }
+    };
+
+    if (isAnimeDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () =>
+        document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [isAnimeDropdownOpen]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (isAnimeBackupDropdownOpen) {
+        const target = event.target as Element;
+        if (!target.closest('[data-dropdown="anime-datasource-backup"]')) {
+          setIsAnimeBackupDropdownOpen(false);
+        }
+      }
+    };
+
+    if (isAnimeBackupDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () =>
+        document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [isAnimeBackupDropdownOpen]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
       if (isDoubanImageProxyDropdownOpen) {
         const target = event.target as Element;
         if (!target.closest('[data-dropdown="douban-image-proxy"]')) {
@@ -1325,6 +1391,38 @@ export const UserMenu: React.FC = () => {
     }
   };
 
+  const handleAnimeDataSourceChange = (value: string) => {
+    clearBangumiImageFallbackCache();
+    setAnimeDataSource(value);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('animeDataSource', value);
+    }
+  };
+
+  const handleAnimeDataSourceBackupChange = (value: string) => {
+    clearBangumiImageFallbackCache();
+    setAnimeDataSourceBackup(value);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('animeDataSourceBackup', value);
+    }
+  };
+
+  const handleAnimeCustomBaseUrlChange = (value: string) => {
+    clearBangumiImageFallbackCache();
+    setAnimeCustomBaseUrl(value);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('animeCustomBaseUrl', value);
+    }
+  };
+
+  const handleAnimeImageBaseUrlChange = (value: string) => {
+    clearBangumiImageFallbackCache();
+    setAnimeImageBaseUrl(value);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('animeImageBaseUrl', value);
+    }
+  };
+
   const handleDoubanImageProxyTypeChange = (value: string) => {
     setDoubanImageProxyType(value);
     if (typeof window !== 'undefined') {
@@ -1539,6 +1637,10 @@ export const UserMenu: React.FC = () => {
       (window as any).RUNTIME_CONFIG?.DOUBAN_IMAGE_PROXY || '';
     const defaultFluidSearch =
       (window as any).RUNTIME_CONFIG?.FLUID_SEARCH !== false;
+    const defaultAnimeDataSource =
+      (window as any).RUNTIME_CONFIG?.BANGUMI_DATA_SOURCE || 'direct';
+    const defaultAnimeBaseUrl = '';
+    const defaultAnimeImageBaseUrl = '';
 
     setDefaultAggregateSearch(true);
     setEnableOptimization(true);
@@ -1550,6 +1652,10 @@ export const UserMenu: React.FC = () => {
     setDoubanDataSource(defaultDoubanProxyType);
     setDoubanDataSourceBackup('direct');
     setDoubanProxyUrlBackup('');
+    setAnimeDataSource(defaultAnimeDataSource);
+    setAnimeDataSourceBackup('server-proxy');
+    setAnimeCustomBaseUrl(defaultAnimeBaseUrl);
+    setAnimeImageBaseUrl(defaultAnimeImageBaseUrl);
     setDoubanImageProxyType(defaultDoubanImageProxyType);
     setDoubanImageProxyUrl(defaultDoubanImageProxyUrl);
     setDoubanImageProxyTypeBackup('server');
@@ -1581,6 +1687,10 @@ export const UserMenu: React.FC = () => {
       localStorage.setItem('doubanDataSource', defaultDoubanProxyType);
       localStorage.setItem('doubanDataSourceBackup', 'direct');
       localStorage.setItem('doubanProxyUrlBackup', '');
+      localStorage.setItem('animeDataSource', defaultAnimeDataSource);
+      localStorage.setItem('animeDataSourceBackup', 'server-proxy');
+      localStorage.setItem('animeCustomBaseUrl', defaultAnimeBaseUrl);
+      localStorage.setItem('animeImageBaseUrl', defaultAnimeImageBaseUrl);
       localStorage.setItem('doubanImageProxyType', defaultDoubanImageProxyType);
       localStorage.setItem('doubanImageProxyUrl', defaultDoubanImageProxyUrl);
       localStorage.setItem('doubanImageProxyTypeBackup', 'server');
@@ -2142,6 +2252,9 @@ export const UserMenu: React.FC = () => {
                   {/* 分割线 */}
                   <div className='border-t border-gray-200 dark:border-gray-700'></div>
 
+                  {/* 分割线 */}
+                  <div className='border-t border-gray-200 dark:border-gray-700'></div>
+
                   {/* 豆瓣图片代理设置 */}
                   <div className='space-y-3'>
                     <div>
@@ -2375,6 +2488,185 @@ export const UserMenu: React.FC = () => {
                         handleTmdbImageBaseUrlChange(e.target.value)
                       }
                     />
+                  </div>
+
+                  {/* 分割线 */}
+                  <div className='border-t border-gray-200 dark:border-gray-700'></div>
+
+                  {/* 动漫数据源设置 */}
+                  <div className='space-y-4'>
+                    <div>
+                      <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
+                        动漫数据源
+                      </h4>
+                      <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
+                        用于 Bangumi
+                        新番放送和番剧详情；默认主源直连，备用源服务器代理。
+                      </p>
+                    </div>
+
+                    <div className='grid gap-3 md:grid-cols-2'>
+                      <div className='space-y-2'>
+                        <label className='text-xs font-medium text-gray-600 dark:text-gray-400'>
+                          主数据源
+                        </label>
+                        <div
+                          className='relative'
+                          data-dropdown='anime-datasource'
+                        >
+                          <button
+                            type='button'
+                            onClick={() =>
+                              setIsAnimeDropdownOpen(!isAnimeDropdownOpen)
+                            }
+                            className='w-full px-3 py-2.5 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all duration-200 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 shadow-sm hover:border-gray-400 dark:hover:border-gray-500 text-left'
+                          >
+                            {
+                              animeDataSourceOptions.find(
+                                (option) => option.value === animeDataSource
+                              )?.label
+                            }
+                          </button>
+                          <div className='absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none'>
+                            <ChevronDown
+                              className={`w-4 h-4 text-gray-400 dark:text-gray-500 transition-transform duration-200 ${
+                                isAnimeDropdownOpen ? 'rotate-180' : ''
+                              }`}
+                            />
+                          </div>
+                          {isAnimeDropdownOpen && (
+                            <div className='absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg max-h-60 overflow-auto'>
+                              {animeDataSourceOptions.map((option) => (
+                                <button
+                                  key={option.value}
+                                  type='button'
+                                  onClick={() => {
+                                    handleAnimeDataSourceChange(option.value);
+                                    setIsAnimeDropdownOpen(false);
+                                  }}
+                                  className={`w-full px-3 py-2.5 text-left text-sm transition-colors duration-150 flex items-center justify-between hover:bg-gray-100 dark:hover:bg-gray-700 ${
+                                    animeDataSource === option.value
+                                      ? 'bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400'
+                                      : 'text-gray-900 dark:text-gray-100'
+                                  }`}
+                                >
+                                  <span className='truncate'>
+                                    {option.label}
+                                  </span>
+                                  {animeDataSource === option.value && (
+                                    <Check className='w-4 h-4 text-green-600 dark:text-green-400 flex-shrink-0 ml-2' />
+                                  )}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className='space-y-2'>
+                        <label className='text-xs font-medium text-gray-600 dark:text-gray-400'>
+                          备用数据源
+                        </label>
+                        <div
+                          className='relative'
+                          data-dropdown='anime-datasource-backup'
+                        >
+                          <button
+                            type='button'
+                            onClick={() =>
+                              setIsAnimeBackupDropdownOpen(
+                                !isAnimeBackupDropdownOpen
+                              )
+                            }
+                            className='w-full px-3 py-2.5 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all duration-200 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 shadow-sm hover:border-gray-400 dark:hover:border-gray-500 text-left'
+                          >
+                            {
+                              animeDataSourceOptions.find(
+                                (option) =>
+                                  option.value === animeDataSourceBackup
+                              )?.label
+                            }
+                          </button>
+                          <div className='absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none'>
+                            <ChevronDown
+                              className={`w-4 h-4 text-gray-400 dark:text-gray-500 transition-transform duration-200 ${
+                                isAnimeBackupDropdownOpen ? 'rotate-180' : ''
+                              }`}
+                            />
+                          </div>
+                          {isAnimeBackupDropdownOpen && (
+                            <div className='absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg max-h-60 overflow-auto'>
+                              {animeDataSourceOptions.map((option) => (
+                                <button
+                                  key={option.value}
+                                  type='button'
+                                  onClick={() => {
+                                    handleAnimeDataSourceBackupChange(
+                                      option.value
+                                    );
+                                    setIsAnimeBackupDropdownOpen(false);
+                                  }}
+                                  className={`w-full px-3 py-2.5 text-left text-sm transition-colors duration-150 flex items-center justify-between hover:bg-gray-100 dark:hover:bg-gray-700 ${
+                                    animeDataSourceBackup === option.value
+                                      ? 'bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400'
+                                      : 'text-gray-900 dark:text-gray-100'
+                                  }`}
+                                >
+                                  <span className='truncate'>
+                                    {option.label}
+                                  </span>
+                                  {animeDataSourceBackup === option.value && (
+                                    <Check className='w-4 h-4 text-green-600 dark:text-green-400 flex-shrink-0 ml-2' />
+                                  )}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {(animeDataSource === 'custom-baseurl' ||
+                      animeDataSourceBackup === 'custom-baseurl') && (
+                      <div className='space-y-2'>
+                        <label className='text-xs font-medium text-gray-600 dark:text-gray-400'>
+                          动漫自定义 Base URL
+                        </label>
+                        <input
+                          type='text'
+                          className='w-full px-3 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all duration-200 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 shadow-sm hover:border-gray-400 dark:hover:border-gray-500'
+                          placeholder='例如: https://api.bgm.tv 或 https://bangumi-proxy.example.com'
+                          value={animeCustomBaseUrl}
+                          onChange={(e) =>
+                            handleAnimeCustomBaseUrlChange(e.target.value)
+                          }
+                        />
+                        {!animeCustomBaseUrl.trim() && (
+                          <p className='text-xs text-amber-600 dark:text-amber-400 mt-1'>
+                            未填写时自定义 Base URL 会自动按 Bangumi
+                            官方直连处理。
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    <div className='space-y-2'>
+                      <label className='text-xs font-medium text-gray-600 dark:text-gray-400'>
+                        动漫图片 Base URL
+                      </label>
+                      <input
+                        type='text'
+                        className='w-full px-3 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all duration-200 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 shadow-sm hover:border-gray-400 dark:hover:border-gray-500'
+                        placeholder='例如: https://proxy.example.com'
+                        value={animeImageBaseUrl}
+                        onChange={(e) =>
+                          handleAnimeImageBaseUrlChange(e.target.value)
+                        }
+                      />
+                      <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
+                        用于替换 Bangumi
+                        图片域名。只需填写基础部分，不需要填写完整图片路径。
+                      </p>
+                    </div>
                   </div>
                 </div>
               )}
